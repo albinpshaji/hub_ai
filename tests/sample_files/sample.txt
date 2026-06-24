@@ -1,0 +1,17 @@
+This is a sample text file for testing the CixioHub AI service extraction pipeline.
+
+Machine learning is a subset of artificial intelligence that uses statistical methods
+to enable machines to improve with experience. It focuses on the development of
+computer programs that can access data and use it to learn for themselves.
+
+The process of learning begins with observations or data, such as examples, direct
+experience, or instruction, in order to look for patterns in data and make better
+decisions in the future based on the examples that we provide.
+
+Deep learning is a subset of machine learning that uses neural networks with many
+layers (hence "deep") to analyze various factors of data. Deep learning is especially
+useful for processing large amounts of unstructured data such as images, sound, and text.
+
+Natural Language Processing (NLP) is a branch of artificial intelligence that helps
+computers understand, interpret and manipulate human language. NLP draws from many
+disciplines, including computer science and computational linguistics.
