@@ -12,6 +12,8 @@ from app.rag.chunker import chunk_text
 from app.rag.embedder import generate_embeddings_batch
 from app.rag.vector_store import store_chunks, delete_document
 from app.rag.retriever import retrieve_chunks
+from app.rag.extractor import extract_text
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/rag", tags=["rag"])
@@ -19,47 +21,110 @@ router = APIRouter(prefix="/rag", tags=["rag"])
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest_document(body: IngestRequest):
     """
-    Ingest a document into the RAG pipeline.
-    Chunks the text, embeds chunks via Ollama, and stores them in ChromaDB.
+    Complete RAG ingestion pipeline.
+
+    Upload
+      ↓
+    Extract
+      ↓
+    Chunk
+      ↓
+    Embed
+      ↓
+    Store in ChromaDB
     """
+
     try:
-        # 1. Chunking
+
+        logger.info(
+            "Starting ingestion for document %s",
+            body.document_id,
+        )
+
+        # ----------------------------------------------------
+        # STEP 1 : Extract text
+        # ----------------------------------------------------
+
+        extraction = extract_text(
+            body.file_path,
+            body.file_type,
+        )
+
+        logger.info(
+            "Extracted %d characters",
+            len(extraction.raw_text),
+        )
+
+        # ----------------------------------------------------
+        # STEP 2 : Chunk
+        # ----------------------------------------------------
+
         metadata = {
             "document_id": body.document_id,
             "user_id": body.user_id,
-            "filename": body.filename
+            "filename": body.filename,
         }
-        chunks = chunk_text(body.text, metadata)
-        
+
+        chunks = chunk_text(
+            extraction.raw_text,
+            metadata,
+        )
+
         if not chunks:
-            return IngestResponse(chunks_stored=0)
-            
-        # 2. Embedding
-        texts_to_embed = [c.text for c in chunks]
-        embeddings = await generate_embeddings_batch(texts_to_embed)
-        
-        # 3. Storage
-        chunk_ids = [c.chunk_id for c in chunks]
-        documents = [c.text for c in chunks]
-        # ChromaDB does not allow None values in metadata
-        metadatas = [c.metadata.model_dump(exclude_none=True) for c in chunks]
-        
-        # Run synchronous ChromaDB operation in a separate thread if needed,
-        # but for simplicity calling it directly here.
-        store_chunks(
-            chunk_ids=chunk_ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas
+            return IngestResponse(
+                chunks_stored=0,
+            )
+
+        logger.info(
+            "Generated %d chunks",
+            len(chunks),
+        )
+
+        # ----------------------------------------------------
+        # STEP 3 : Generate embeddings
+        # ----------------------------------------------------
+
+        texts = [chunk.text for chunk in chunks]
+
+        embeddings = await generate_embeddings_batch(texts)
+
+        # ----------------------------------------------------
+        # STEP 4 : Store in ChromaDB
+        # ----------------------------------------------------
+
+        logger.info(
+            "Storing %d chunks for user %s",
+            len(chunks),
+            body.user_id,
         )
         
-        return IngestResponse(chunks_stored=len(chunks))
-        
+
+        store_chunks(
+            chunk_ids=[c.chunk_id for c in chunks],
+            embeddings=embeddings,
+            documents=[c.text for c in chunks],
+            metadatas=[
+                c.metadata.model_dump(exclude_none=True)
+                for c in chunks
+            ],
+        )
+
+        logger.info(
+            "Stored %d chunks successfully",
+            len(chunks),
+        )
+
+        return IngestResponse(
+            chunks_stored=len(chunks),
+        )
+
     except Exception as exc:
-        logger.error("Ingestion failed: %s", exc)
+
+        logger.exception(exc)
+
         raise HTTPException(
             status_code=500,
-            detail=f"Ingestion failed: {type(exc).__name__}: {exc}"
+            detail=str(exc),
         )
 
 @router.delete("/documents/{document_id}")

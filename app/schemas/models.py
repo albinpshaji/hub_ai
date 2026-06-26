@@ -95,10 +95,34 @@ class EmbedResponse(BaseModel):
 # ═══════════════════════════════════════════════════════════════
 
 class IngestRequest(BaseModel):
+    """
+    Request sent by hub_notify after a document upload.
+
+    The AI service is responsible for:
+    - Extracting text
+    - Chunking
+    - Embedding
+    - Storing vectors
+    """
+
     user_id: str = Field(..., description="UUID of the user")
+
     document_id: str = Field(..., description="UUID of the document")
-    text: str = Field(..., description="Full text to chunk, embed, and store")
-    filename: str = Field(..., description="Original filename")
+
+    file_path: str = Field(
+        ...,
+        description="Absolute path of the uploaded document"
+    )
+
+    file_type: str = Field(
+        ...,
+        description="Document type (pdf, docx, txt...)"
+    )
+
+    filename: str = Field(
+        ...,
+        description="Original filename"
+    )
 
 class IngestResponse(BaseModel):
     chunks_stored: int = Field(..., description="Number of chunks generated and stored")

@@ -26,11 +26,18 @@ async def retrieve_chunks(query: str, user_id: str, top_k: int = 5) -> List[str]
         
         # 2. Search ChromaDB
         collection = get_collection()
+        logger.info("Retrieving with user_id = %s", user_id)
+        #results = collection.query(
+        #    query_embeddings=[query_embedding],
+        #    n_results=top_k,
+        #    where={"user_id": user_id}
+        #)
+
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k,
-            where={"user_id": user_id}
         )
+        logger.info("Raw Chroma results: %s", results)
         
         # results["documents"] is a list of lists: [['chunk1', 'chunk2', ...]]
         documents = results.get("documents", [])

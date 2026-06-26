@@ -52,7 +52,13 @@ def store_chunks(
     """Store embedded chunks in ChromaDB."""
     if not chunk_ids:
         return
-        
+    
+    print("=" * 60)
+    print("STORING CHUNKS")
+    print("First metadata:")
+    print(metadatas[0])
+    print("=" * 60)
+            
     collection = get_collection()
     collection.add(
         ids=chunk_ids,
