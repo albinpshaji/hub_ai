@@ -79,6 +79,18 @@ async def chat_stream(body: ChatRequest):
             try:
                 # Retrieve relevant chunks
                 chunks = await retrieve_chunks(query, body.user_id)
+
+                logger.info("=" * 80)
+                logger.info("USER QUERY")
+                logger.info(query)
+
+                logger.info("=" * 80)
+                logger.info("RETRIEVED CHUNKS")
+
+                for i, chunk in enumerate(chunks, 1):
+                    logger.info(f"Chunk {i}")
+                    logger.info(chunk)
+                    logger.info("-" * 60)
                 if chunks:
                     context_block = assemble_context(chunks)
                     # Augment the last message content
