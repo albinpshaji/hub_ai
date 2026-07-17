@@ -1,0 +1,13 @@
+services:
+  ai-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Shares your Linux host's network directly.
+    # This allows the container to connect to "localhost" on your device directly.
+    network_mode: "host"
+    volumes:
+      # Mount codebase for local hot-reloads during development
+      - .:/app
+    env_file:
+      - .env
