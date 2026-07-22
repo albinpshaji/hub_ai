@@ -1,9 +1,10 @@
 import json
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks, status, Query, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks, status, Query, UploadFile, File, Request, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+import httpx
 
 from app.config import settings
 from app.schemas import (
@@ -33,23 +34,54 @@ from app.services.search_service import unified_web_search
 from app.services.vision_service import (
     extract_visuals_from_pdf,
     reinspect_page,
-    describe_image,
     process_and_compress_image,
 )
+from app.services.http_client import init_http_client, close_http_client, get_http_client
 import base64
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+async def verify_api_key(request: Request):
+    if settings.ai_api_key:
+        key = request.headers.get("X-AI-API-Key")
+        if key != settings.ai_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid API key",
+            )
+
+
+def _safe_error(exc: Exception, context: str = "AI service") -> tuple[int, str]:
+    """
+    Map exceptions to safe HTTP status codes and sanitized messages.
+    Prevents leaking internal paths, stack traces, or Ollama errors to clients.
+    """
+    if isinstance(exc, httpx.ConnectError):
+        return 503, f"{context}: model service is unavailable"
+    if isinstance(exc, httpx.TimeoutException):
+        return 504, f"{context}: request timed out"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return 502, f"{context}: upstream service returned an error"
+    if isinstance(exc, ValueError):
+        return 400, f"{context}: {exc}"
+    # Generic fallback — never expose raw str(exc)
+    logger.error("Unhandled error in %s: %s", context, exc, exc_info=True)
+    return 500, f"{context}: internal error"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize vector collection at startup
+    # Initialize shared HTTP client and vector collection at startup
+    await init_http_client()
     try:
         await init_qdrant_collection()
     except Exception as e:
         logger.error("Failed to initialize Qdrant collection: %s", e)
     yield
+    # Gracefully close shared HTTP client on shutdown
+    await close_http_client()
 
 
 app = FastAPI(
@@ -68,7 +100,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-router = APIRouter(prefix="/api/v1")
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(verify_api_key)])
+
 
 
 @router.post("/chat/stream")
@@ -103,10 +136,8 @@ async def handle_summarize(payload: SummarizeRequest):
         summary = await summarize_text(payload.text)
         return {"summary": summary}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Summarization")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/embeddings")
@@ -115,10 +146,8 @@ async def handle_embeddings(payload: EmbeddingRequest):
         embedding = await get_embedding(payload.text)
         return {"embedding": embedding}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Embedding")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/documents/ingest")
@@ -133,10 +162,8 @@ async def handle_ingest(payload: IngestRequest):
         )
         return {"chunks_stored": chunks_stored}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Document ingestion")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/chat/tools")
@@ -149,10 +176,8 @@ async def handle_chat_with_tools(payload: ChatWithToolsRequest):
         )
         return {"message": message}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Tool-calling chat")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/documents/ingest_images")
@@ -167,10 +192,8 @@ async def handle_ingest_images(payload: IngestImagesRequest):
         )
         return {"chunks_stored": chunks_stored}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Image ingestion")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/documents/search")
@@ -190,10 +213,8 @@ async def handle_search(payload: SearchRequest):
         )
         return {"results": results}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Document search")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -205,10 +226,8 @@ async def handle_delete_document(document_id: str, user_id: str = Query(...)):
             document_id=uuid.UUID(document_id),
         )
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Document deletion")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/extract")
@@ -220,10 +239,8 @@ async def handle_extract(payload: ExtractRequest):
         )
         return {"text": text}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Text extraction")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @app.get("/")
@@ -242,10 +259,8 @@ async def handle_web_search(payload: WebSearchRequest):
         result = await unified_web_search(payload.query, max_results=payload.max_results)
         return {"result": result}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Web search")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/vision/compress")
@@ -256,10 +271,8 @@ async def handle_vision_compress(file: UploadFile = File(...)):
         b64_str = base64.b64encode(compressed).decode("utf-8")
         return {"base64_image": b64_str}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Image compression")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/vision/extract_visuals")
@@ -268,10 +281,8 @@ async def handle_extract_visuals(payload: ExtractVisualsRequest):
         visuals = extract_visuals_from_pdf(payload.pdf_path)
         return {"visuals": visuals}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Visual extraction")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/vision/reinspect")
@@ -284,49 +295,47 @@ async def handle_reinspect(payload: ReinspectPageRequest):
         )
         return {"description": desc}
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
-        )
+        code, msg = _safe_error(exc, "Page reinspection")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 @router.post("/vision/qa")
 async def handle_vision_qa(payload: VisionQARequest):
+    """Answer a specific question about an image using the vision model.
+
+    Previous implementation called describe_image() first (wasting a full
+    GPU inference pass) then immediately discarded the result and ran a
+    second inference with the user's question. Now we go straight to the
+    targeted question — halving GPU work per request.
+    """
     try:
-        desc = await describe_image(payload.base64_image)
-        # In describe_image, it uses a generic system prompt. If the user provided a specific question,
-        # we want to ask Ollama vision model with that question specifically, similar to reinspect_page.
-        # Let's write inline logic to query Ollama directly with their custom question and this image.
         prompt = (
             f"Look at this image. Answer the following question based on the visual contents: {payload.question}"
         )
-        import httpx
-        async with httpx.AsyncClient(timeout=300) as client:
-            response = await client.post(
-                f"{settings.ollama_base_url}/api/generate",
-                json={
-                    "model": settings.ollama_vision_model,
-                    "prompt": prompt,
-                    "images": [payload.base64_image],
-                    "stream": False,
-                    "think": False,
-                    "options": {
-                        "num_ctx": 4096,
-                    },
-                    "keep_alive": "10s",
-                }
-            )
-            response.raise_for_status()
-            res_data = response.json()
-            desc = res_data.get("response", "").strip()
-            if not desc:
-                desc = res_data.get("thinking", "").strip()
-            return {"description": desc}
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc)
+        client = get_http_client()
+        response = await client.post(
+            f"{settings.ollama_base_url}/api/generate",
+            json={
+                "model": settings.ollama_vision_model,
+                "prompt": prompt,
+                "images": [payload.base64_image],
+                "stream": False,
+                "think": False,
+                "options": {
+                    "num_ctx": 4096,
+                },
+                "keep_alive": "10s",
+            }
         )
+        response.raise_for_status()
+        res_data = response.json()
+        desc = res_data.get("response", "").strip()
+        if not desc:
+            desc = res_data.get("thinking", "").strip()
+        return {"description": desc}
+    except Exception as exc:
+        code, msg = _safe_error(exc, "Vision QA")
+        raise HTTPException(status_code=code, detail=msg)
 
 
 app.include_router(router)

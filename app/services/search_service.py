@@ -1,8 +1,8 @@
 import logging
 import re
-import httpx
 from ddgs import DDGS
 from app.config import settings
+from app.services.http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -31,25 +31,25 @@ async def search_tavily(query: str, max_results: int = 5) -> str:
         raise ValueError("Tavily API key is not configured.")
         
     url = "https://api.tavily.com/search"
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(
-            url,
-            json={
-                "api_key": settings.tavily_api_key,
-                "query": query,
-                "max_results": max_results
-            }
-        )
-        response.raise_for_status()
-        results = response.json().get("results", [])
-        
-        formatted = []
-        for res in results:
-            snippet = _clean_snippet(res.get('content', ''))
-            if len(snippet) > 2000:
-                snippet = snippet[:2000] + "..."
-            formatted.append(f"Source: {res['url']}\nTitle: {res['title']}\nSnippet: {snippet}")
-        return "\n\n".join(formatted)
+    client = get_http_client()
+    response = await client.post(
+        url,
+        json={
+            "api_key": settings.tavily_api_key,
+            "query": query,
+            "max_results": max_results
+        }
+    )
+    response.raise_for_status()
+    results = response.json().get("results", [])
+
+    formatted = []
+    for res in results:
+        snippet = _clean_snippet(res.get('content', ''))
+        if len(snippet) > 2000:
+            snippet = snippet[:2000] + "..."
+        formatted.append(f"Source: {res['url']}\nTitle: {res['title']}\nSnippet: {snippet}")
+    return "\n\n".join(formatted)
 
 
 def search_duckduckgo(query: str, max_results: int = 5) -> str:

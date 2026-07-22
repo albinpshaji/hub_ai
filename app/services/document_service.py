@@ -12,10 +12,13 @@ Students (Backend role): this file is already wired.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-import httpx
 
 from app.config import settings
+from app.services.http_client import get_http_client
+
+logger = logging.getLogger(__name__)
 
 
 async def extract_text(file_path: str, file_type: str) -> str:
@@ -30,10 +33,10 @@ async def extract_text(file_path: str, file_type: str) -> str:
     # 1. Retrieve the file content
     if file_path.startswith("http://") or file_path.startswith("https://"):
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(file_path)
-                resp.raise_for_status()
-                content_bytes = resp.content
+            client = get_http_client()
+            resp = await client.get(file_path)
+            resp.raise_for_status()
+            content_bytes = resp.content
         except Exception:
             pass
     else:
@@ -65,24 +68,12 @@ async def extract_text(file_path: str, file_type: str) -> str:
             except Exception:
                 pass
 
-    # 3. Fallback to external AI service on port 8003
-    try:
-        async with httpx.AsyncClient(
-            base_url=settings.ai_service_url, timeout=120
-        ) as client:
-            response = await client.post(
-                "/api/v1/extract",
-                json={"file_path": file_path, "file_type": file_type},
-            )
-            response.raise_for_status()
-            return response.json()["text"]
-    except Exception as exc:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(
-            "External AI service extraction failed for %s (type %s). Fallback to empty text. Error: %s",
-            file_path,
-            file_type,
-            exc,
-        )
-        return ""
+    # 3. If all local extraction failed, return empty.
+    # NOTE: Previously this fell back to calling settings.ai_service_url (/api/v1/extract)
+    # which was the same service (port 8003), creating a recursive HTTP loop.
+    logger.warning(
+        "Local extraction failed for %s (type %s). Returning empty text.",
+        file_path,
+        file_type,
+    )
+    return ""

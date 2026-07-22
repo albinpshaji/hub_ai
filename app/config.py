@@ -22,7 +22,10 @@ class Settings(BaseSettings):
     qdrant_collection: str = "user_documents"
     enable_reranker: bool = False
     reranker_model: str = "mixedbread-ai/mxbai-rerank-base-v1"
+    reranker_device: str = "cuda"
     ai_service_url: str = "http://localhost:8003"
+    ai_api_key: str | None = None
+
 
 
 settings = Settings()

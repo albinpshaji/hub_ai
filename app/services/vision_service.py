@@ -11,11 +11,11 @@ from __future__ import annotations
 import base64
 import io
 import logging
-import httpx
 import fitz  # PyMuPDF
 from PIL import Image
 
 from app.config import settings
+from app.services.http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -132,34 +132,34 @@ async def describe_image(base64_image: str) -> str:
         "Ensure the description is structured and under 1000 words in total."
     )
 
-    async with httpx.AsyncClient(timeout=300) as client:
-        try:
-            response = await client.post(
-                f"{settings.ollama_base_url}/api/generate",
-                json={
-                    "model": settings.ollama_vision_model,
-                    "prompt": prompt,
-                    "images": [base64_image],
-                    "stream": False,
-                    "think": False,
-                    "options": {
-                        "num_ctx": 4096,
-                    },
-                    "keep_alive": "10s",
-                }
-            )
-            response.raise_for_status()
-            res_data = response.json()
-            desc = res_data.get("response", "").strip()
-            if not desc:
-                desc = res_data.get("thinking", "").strip()
-            return desc
-        except Exception as exc:
-            logger.error(
-                "Ollama vision inference failed using model %s: %s",
-                settings.ollama_vision_model, exc
-            )
-            raise exc
+    client = get_http_client()
+    try:
+        response = await client.post(
+            f"{settings.ollama_base_url}/api/generate",
+            json={
+                "model": settings.ollama_vision_model,
+                "prompt": prompt,
+                "images": [base64_image],
+                "stream": False,
+                "think": False,
+                "options": {
+                    "num_ctx": 4096,
+                },
+                "keep_alive": "10s",
+            }
+        )
+        response.raise_for_status()
+        res_data = response.json()
+        desc = res_data.get("response", "").strip()
+        if not desc:
+            desc = res_data.get("thinking", "").strip()
+        return desc
+    except Exception as exc:
+        logger.error(
+            "Ollama vision inference failed using model %s: %s",
+            settings.ollama_vision_model, exc
+        )
+        raise exc
 
 
 async def reinspect_page(pdf_path: str, page_number: int, specific_question: str) -> str:
@@ -186,28 +186,28 @@ async def reinspect_page(pdf_path: str, page_number: int, specific_question: str
             f"charts, tables, or equations: {specific_question}"
         )
 
-        async with httpx.AsyncClient(timeout=300) as client:
-            response = await client.post(
-                f"{settings.ollama_base_url}/api/generate",
-                json={
-                    "model": settings.ollama_vision_model,
-                    "prompt": prompt,
-                    "images": [b64_str],
-                    "stream": False,
-                    "think": False,
-                    "options": {
-                        "num_ctx": 4096,
-                    },
-                    "keep_alive": "10s",
-                }
-            )
-            response.raise_for_status()
-            res_data = response.json()
-            desc = res_data.get("response", "").strip()
-            if not desc:
-                desc = res_data.get("thinking", "").strip()
-            print(f"[Vision AI] Page {page_number} re-inspected successfully!")
-            return desc
+        client = get_http_client()
+        response = await client.post(
+            f"{settings.ollama_base_url}/api/generate",
+            json={
+                "model": settings.ollama_vision_model,
+                "prompt": prompt,
+                "images": [b64_str],
+                "stream": False,
+                "think": False,
+                "options": {
+                    "num_ctx": 4096,
+                },
+                "keep_alive": "10s",
+            }
+        )
+        response.raise_for_status()
+        res_data = response.json()
+        desc = res_data.get("response", "").strip()
+        if not desc:
+            desc = res_data.get("thinking", "").strip()
+        print(f"[Vision AI] Page {page_number} re-inspected successfully!")
+        return desc
     except Exception as exc:
         print(f"[Vision AI] Failed to reinspect page {page_number}: {exc}")
         logger.error(

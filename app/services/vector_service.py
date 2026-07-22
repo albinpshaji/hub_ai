@@ -32,6 +32,7 @@ from qdrant_client.models import (
 )
 
 from app.config import settings
+from app.services.http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -149,16 +150,17 @@ async def get_ollama_embedding(text: str, prefix_type: str | None = None) -> lis
 
     formatted_text = prefix + text
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            f"{settings.ollama_base_url}/api/embeddings",
-            json={
-                "model": settings.ollama_embed_model,
-                "prompt": formatted_text,
-            },
-        )
-        response.raise_for_status()
-        return response.json()["embedding"]
+    client = get_http_client()
+    response = await client.post(
+        f"{settings.ollama_base_url}/api/embeddings",
+        json={
+            "model": settings.ollama_embed_model,
+            "prompt": formatted_text,
+            "keep_alive": "30s",
+        },
+    )
+    response.raise_for_status()
+    return response.json()["embedding"]
 
 
 # ---------------------------------------------------------------------------
@@ -519,21 +521,21 @@ async def generate_hypothetical_document(query: str) -> str:
         "Passage:"
     )
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.post(
-            f"{settings.ollama_base_url}/api/generate",
-            json={
-                "model": settings.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-                "think": False,
-                "options": {
-                    "num_predict": 120,
-                }
-            },
-        )
-        response.raise_for_status()
-        return response.json().get("response", "").strip()
+    client = get_http_client()
+    response = await client.post(
+        f"{settings.ollama_base_url}/api/generate",
+        json={
+            "model": settings.ollama_model,
+            "prompt": prompt,
+            "stream": False,
+            "think": False,
+            "options": {
+                "num_predict": 120,
+            }
+        },
+    )
+    response.raise_for_status()
+    return response.json().get("response", "").strip()
 
 
 async def _semantic_candidates(

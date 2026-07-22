@@ -12,9 +12,8 @@ import json
 import logging
 from collections.abc import AsyncIterator
 
-import httpx
-
 from app.config import settings
+from app.services.http_client import get_http_client
 from app.services.vector_service import get_ollama_embedding  # re-export convenience
 
 logger = logging.getLogger(__name__)
@@ -32,22 +31,22 @@ async def chat_stream(
 
     Raises httpx.ConnectError if Ollama is not reachable.
     """
-    async with httpx.AsyncClient(timeout=300) as client:
-        async with client.stream(
-            "POST",
-            f"{settings.ollama_base_url}/api/chat",
-            json={
-                "model": settings.ollama_model,
-                "messages": messages,
-                "stream": True,
-                "think": think,
-                "options": {
-                    "num_ctx": 16384,
-                    "num_predict": -1,
-                },
-                "keep_alive": "5m",
+    client = get_http_client()
+    async with client.stream(
+        "POST",
+        f"{settings.ollama_base_url}/api/chat",
+        json={
+            "model": settings.ollama_model,
+            "messages": messages,
+            "stream": True,
+            "think": think,
+            "options": {
+                "num_ctx": 16384,
+                "num_predict": -1,
             },
-        ) as response:
+            "keep_alive": "5m",
+        },
+    ) as response:
             response.raise_for_status()
             in_thinking = False
             async for line in response.aiter_lines():
@@ -84,21 +83,21 @@ async def summarize_text(text: str) -> str:
     Returns a concise 3-sentence summary of the input text.
     Raises httpx.ConnectError if Ollama is not reachable.
     """
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            f"{settings.ollama_base_url}/api/generate",
-            json={
-                "model": settings.ollama_model,
-                "prompt": (
-                    "Summarize the following conversation in 3 concise sentences. "
-                    "Focus on the main topics and key conclusions discussed:\n\n"
-                    f"{text}"
-                ),
-                "stream": False,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "").strip()
+    client = get_http_client()
+    resp = await client.post(
+        f"{settings.ollama_base_url}/api/generate",
+        json={
+            "model": settings.ollama_model,
+            "prompt": (
+                "Summarize the following conversation in 3 concise sentences. "
+                "Focus on the main topics and key conclusions discussed:\n\n"
+                f"{text}"
+            ),
+            "stream": False,
+        },
+    )
+    resp.raise_for_status()
+    return resp.json().get("response", "").strip()
 
 
 async def get_embedding(text: str) -> list[float]:
@@ -126,20 +125,21 @@ async def chat_with_tools(
         "options": {
             "num_ctx": 16384,
             "num_predict": -1,
+            "temperature": 0.0 if tools else 0.7, # Enforce deterministic output to prevent XML drift when tools are active
         },
         "keep_alive": "5m",
     }
     if tools:
         payload["tools"] = tools
 
-    async with httpx.AsyncClient(timeout=300) as client:
-        try:
-            response = await client.post(
-                f"{settings.ollama_base_url}/api/chat",
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json().get("message", {})
-        except Exception as exc:
-            logger.error("Ollama chat_with_tools request failed: %s", exc)
-            raise exc
+    client = get_http_client()
+    try:
+        response = await client.post(
+            f"{settings.ollama_base_url}/api/chat",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json().get("message", {})
+    except Exception as exc:
+        logger.error("Ollama chat_with_tools request failed: %s", exc)
+        raise exc
